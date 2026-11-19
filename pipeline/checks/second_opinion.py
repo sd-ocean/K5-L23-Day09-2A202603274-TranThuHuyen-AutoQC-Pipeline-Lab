@@ -35,10 +35,73 @@ Gợi ý
 - `iou_xywh` có sẵn. Dòng nhãn hỏng không được làm script chết (dùng `ds.valid_boxes` và `parse_yolo_line` trong try).
 - Kết quả phụ thuộc mạnh vào ngưỡng: calibrate chúng ở Bước 3 thay vì đoán.
 """
-from ..common import WARN, Issue, iou_xywh, parse_yolo_line  # noqa: F401
-from ..model_cache import get_preds  # noqa: F401
+from ..common import WARN, Issue, iou_xywh, parse_yolo_line
+from ..model_cache import get_preds
 
 
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+    rules = cfg["second_opinion"]
+    issues = []
+    for image_path in ds.image_files():
+        stem = image_path.stem
+        if stem not in preds or not ds.label_path(stem).exists():
+            continue
+        size = ds.image_size(stem)
+        if not size:
+            continue
+        width, height = size
+        parsed_labels = []
+        for line_no, raw in ds.read_label_lines(stem) or []:
+            try:
+                label = parse_yolo_line(raw)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= label[0] < len(ds.classes) and label[3] > 0 and label[4] > 0:
+                parsed_labels.append((line_no, label[0], label[1:]))
+
+        parsed_preds = []
+        for row in preds.get(stem, []):
+            try:
+                cls, conf, cx, cy, w, h = row
+                cls, conf = int(cls), float(conf)
+                box = (float(cx), float(cy), float(w), float(h))
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= cls < len(ds.classes)) or w <= 0 or h <= 0:
+                continue
+            parsed_preds.append((cls, conf, box))
+
+        # Ý kiến về thiếu nhãn, box lỏng hoặc nhầm lớp; một cảnh báo tối đa mỗi prediction.
+        for pred_cls, conf, box in parsed_preds:
+            if conf < rules["conf"] or box[2] * width * box[3] * height < rules["min_area_px"]:
+                continue
+            overlaps = [(label, iou_xywh(box, label[2])) for label in parsed_labels]
+            candidates = [(label, overlap) for label, overlap in overlaps
+                          if overlap >= rules["iou_missing"]]
+            if not candidates:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_MISSING", stem,
+                                    "model thấy vật chưa có box nhãn", extra={"conf": conf}))
+                continue
+            same = [overlap for label, overlap in candidates if label[1] == pred_cls]
+            if same:
+                best = max(same)
+                if best < rules["iou_loose"]:
+                    issues.append(Issue("second_opinion", WARN, "POSSIBLE_LOOSE_BOX", stem,
+                                        "box nhãn cùng lớp có thể bị lỏng hoặc lệch", extra={"conf": conf, "iou": best}))
+                continue
+            other = [overlap for label, overlap in candidates if label[1] != pred_cls]
+            if other and max(other) >= rules["iou_match"]:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_WRONG_CLASS", stem,
+                                    "model và nhãn có thể bất đồng lớp", extra={"conf": conf, "iou": max(other)}))
+
+        # False positive dùng fp_conf, không lọc diện tích.
+        fp_preds = [(cls, box) for cls, conf, box in parsed_preds if conf >= rules["fp_conf"]]
+        for line_no, _, label_box in parsed_labels:
+            best = max((iou_xywh(label_box, box) for _, box in fp_preds), default=0.0)
+            if best < rules["iou_missing"]:
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                                    "box nhãn không khớp dự đoán model đủ tin cậy", line_no,
+                                    {"iou": best}))
+    return issues

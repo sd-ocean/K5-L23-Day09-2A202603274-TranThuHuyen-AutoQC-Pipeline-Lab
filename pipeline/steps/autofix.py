@@ -27,13 +27,91 @@ Bẫy cần nghĩ tới (có test cho từng cái)
 
 Gợi ý: `yaml.safe_load / safe_dump`.
 """
-from collections import defaultdict  # noqa: F401
+from collections import defaultdict
 
 import yaml  # noqa: F401
 
-from ..common import ERROR, parse_yolo_line  # noqa: F401
+from ..common import ERROR, parse_yolo_line
 
 
 def fix(ds, issues, cfg):
-    # TODO
-    raise NotImplementedError("autofix chưa làm")
+    changes = []
+    errors = [i for i in issues if i.severity == ERROR]
+    removed = set()
+    remove_codes = {"DUP_IMAGE_EXACT", "DUP_IMAGE_NEAR", "LEAK_TEST", "CORRUPT_IMAGE", "BAD_SIZE"}
+    drop_codes = {"BAD_FORMAT", "BAD_CLASS_ID", "BOX_ZERO", "DUP_BOX"}
+    by_image = defaultdict(lambda: defaultdict(set))
+
+    for issue in errors:
+        if issue.code in remove_codes:
+            stem = issue.image
+            if stem in removed:
+                continue
+            image = ds.image_path(stem)
+            label = ds.label_path(stem)
+            before = str(image.name) if image else stem
+            if image:
+                image.unlink(missing_ok=True)
+            label.unlink(missing_ok=True)
+            removed.add(stem)
+            changes.append(dict(image=stem, line="", action="remove_image", before=before,
+                                after="đã xóa ảnh và nhãn khỏi dataset làm việc"))
+        elif issue.code in drop_codes | {"BOX_OUT_OF_IMAGE"} and issue.line is not None:
+            by_image[issue.image][issue.line].add(issue.code)
+        elif issue.code == "MISSING_LABEL_FILE":
+            changes.append(dict(image=issue.image, line="", action="needs_label",
+                                before="(không có file)", after="chuyển người gán"))
+        elif issue.code == "BAD_CLASS_NAME":
+            # Chỉ ghi YAML một lần dù check có thể phát nhiều issue cấp dataset.
+            if not any(row["action"] == "rename_classes" for row in changes):
+                old = ds.yaml_path.read_text(encoding="utf-8", errors="replace") if ds.yaml_path.exists() else "(không có data.yaml)"
+                doc = yaml.safe_load(old) if old.startswith(("{", "path:", "names:")) else None
+                if not isinstance(doc, dict):
+                    doc = {}
+                doc["names"] = {i: name for i, name in enumerate(cfg["classes"])}
+                ds.yaml_path.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
+                changes.append(dict(image="data.yaml", line="", action="rename_classes", before=old,
+                                    after=str(cfg["classes"])))
+
+    for stem in sorted(by_image):
+        if stem in removed:
+            continue
+        label = ds.label_path(stem)
+        if not label.exists():
+            continue
+        original = label.read_text(encoding="utf-8", errors="replace").splitlines()
+        line_issues = by_image[stem]
+        kept = []
+        touched = {}
+        for number, raw in enumerate(original, 1):
+            codes = line_issues.get(number, set())
+            if not codes:
+                kept.append(raw)
+                continue
+            if codes & drop_codes:
+                action = "drop_line"
+                after = ""
+            else:
+                try:
+                    cls, cx, cy, w, h = parse_yolo_line(raw)
+                except (TypeError, ValueError):
+                    action, after = "drop_line", ""
+                else:
+                    x1, y1 = max(0.0, cx - w / 2), max(0.0, cy - h / 2)
+                    x2, y2 = min(1.0, cx + w / 2), min(1.0, cy + h / 2)
+                    nw, nh = x2 - x1, y2 - y1
+                    if nw <= 0 or nh <= 0:
+                        action, after = "drop_line", ""
+                    else:
+                        ncx, ncy = (x1 + x2) / 2, (y1 + y2) / 2
+                        action = "clip_box"
+                        after = f"{cls} {ncx:.6f} {ncy:.6f} {nw:.6f} {nh:.6f}"
+            touched[number] = (action, raw, after)
+            if action != "drop_line":
+                kept.append(after)
+        if touched:
+            label.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            for number in sorted(touched):
+                action, before, after = touched[number]
+                changes.append(dict(image=stem, line=number, action=action, before=before, after=after))
+    return changes
