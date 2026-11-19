@@ -6,9 +6,9 @@ Pipeline kết luận **Hold**. Cửa nhận giữ 193/224 ảnh (loại 31 ản
 
 ## 2. Lỗi và phân việc
 
-Số dưới đây là số issue theo mã trong `02_error_list_v1.csv`; các mã cửa nhận loại ảnh được nêu riêng. Tổng pipeline: 224 ảnh đầu vào, 193 ảnh được nhận; danh sách QC vòng một có 36 lỗi bắt buộc và 145 cảnh báo.
+Số dưới đây là số issue theo mã trong `02_error_list_v1.csv` trên lô 224 ảnh đầu vào; một ảnh có thể có nhiều issue. Tổng pipeline: 193 ảnh được nhận; QC vòng một có 36 lỗi bắt buộc và 145 cảnh báo.
 
-| Mã lỗi | Số issue | Ai xử lý | Ghi chú |
+| Mã lỗi | Số issue (trên 224 ảnh) | Ai xử lý | Ghi chú |
 |---|---:|---|---|
 | `CORRUPT_IMAGE` | 2 | Máy | Loại ảnh không đọc được tại cửa nhận |
 | `BAD_SIZE` | 3 | Máy | Loại ảnh nhỏ hơn quy tắc dự án |
@@ -19,6 +19,9 @@ Số dưới đây là số issue theo mã trong `02_error_list_v1.csv`; các m�
 | `BAD_FORMAT` / `BAD_CLASS_ID` / `BOX_ZERO` / `DUP_BOX` | 20 tổng | Máy | Xóa dòng nhãn lỗi |
 | `BOX_OUT_OF_IMAGE` | 8 | Máy | Cắt box; nếu không thể giữ box hợp lệ thì xóa dòng |
 | `BAD_CLASS_NAME` | 2 | Máy | Chuẩn hóa tên lớp trong `data.yaml` một lần |
+| `EMPTY_LABEL` | 11 | Người | Kiểm tra ảnh nền hay thiếu nhãn |
+| `BOX_TINY` / `BOX_HUGE` | 9 tổng | Người | Cảnh báo kích thước box; cần xem ảnh |
+| `CLASS_RARE` | 4 | Người | Theo dõi mất cân bằng lớp ở cấp dataset |
 | `POSSIBLE_MISSING` / `POSSIBLE_WRONG_CLASS` / `POSSIBLE_LOOSE_BOX` / `POSSIBLE_FALSE_POS` | 121 tổng | Người | Chỉ cảnh báo; ưu tiên theo điểm hàng đợi |
 
 `03_fixes.csv` ghi 6 ảnh cần gán nhãn, 20 dòng bị xóa, 8 box được cắt và một lần chuẩn hóa tên lớp. Hàng đợi có 121 ảnh; 80 ảnh được mô phỏng duyệt. Ảnh `img_0020` đứng đầu với điểm 11.524 do có cảnh báo thiếu vật/nhầm lớp và một dòng đã được máy xóa; sáu ảnh thiếu nhãn nhận điểm `NEEDS_LABEL=10` và đứng ngay sau. Đây là ưu tiên hợp lý vì ảnh thiếu nhãn cần người gán từ đầu.
@@ -40,13 +43,22 @@ Một giới hạn của calibration: chỉ có 39 ảnh và tập chèn lỗi k
 
 ## 5. Train: raw vs clean
 
-Chưa chạy train. Phần train tùy chọn cần Colab/GPU; do đó chưa có kết quả so sánh raw với clean và chưa thể kết luận chất lượng mô hình.
+Đã train `yolo26n.pt` 20 epoch, batch 16, imgsz 640, hai seed, cùng validation/test. Bảng tổng hợp:
+
+| Biến thể | File ảnh đầu vào | mAP50 | mAP50–95 | Precision | Recall |
+|---|---:|---:|---:|---:|---:|
+| raw | 224 | 0.726 ± 0.000 | 0.512 ± 0.004 | 0.764 ± 0.061 | 0.649 ± 0.028 |
+| clean | 193 | 0.730 ± 0.001 | 0.501 ± 0.001 | 0.800 ± 0.019 | 0.624 ± 0.012 |
+
+Chênh mAP50 clean − raw là +0.0043; với hai seed và test 100 ảnh, chưa đủ bằng chứng để kết luận clean tốt hơn ổn định. JSON ghi raw có 224 file đầu vào, nhưng log Ultralytics xác nhận mỗi seed chỉ dùng **213 ảnh train** sau khi loại 11 ảnh corrupt; clean dùng 193 ảnh. Raw có 11 issue `LEAK_TEST`, nên điểm test của raw có thể bị thổi phồng; cần retrain raw không rò rỉ để ước lượng tác động. Phân tích metric theo lớp và giới hạn được ghi trong [ANALYSIS.md](results/ANALYSIS.md).
 
 ## 6. Quyết định và ghi chú AI
 
 Quyết định hiện tại là **Hold**. Để tiến tới Release, cần xử lý cảnh báo còn lại và chạy lại pipeline; cần giảm tỷ lệ ảnh còn cảnh báo xuống dưới 10% mà vẫn giữ việc kiểm tra nhãn có ý nghĩa.
 
-- AI được dùng để hỗ trợ triển khai bốn module theo docstring và yêu cầu của lab.
-- Cách kiểm: chạy 50 test của bốn module, rồi toàn bộ 79 test và hai lần pipeline (thường và ngân sách 0).
+- Prompt chính: triển khai bốn module theo docstring/test, giữ ngưỡng trong config, xử lý lỗi dòng an toàn và không sửa dữ liệu raw.
+- Cách kiểm: 53 test liên quan (gồm check bonus), toàn bộ 82 test và pipeline e2e; kiểm tra riêng ngân sách 0 cho gate.
 - Lỗi AI phát hiện khi kiểm: code ý kiến thứ hai truyền nhầm cấu trúc tuple của nhãn vào phép tính IoU; đã sửa và chạy lại test.
+
+Bonus +3: thêm check `BOX_EXTREME_ASPECT`, cảnh báo tỉ lệ rộng/cao theo pixel ngoài khoảng 0.1–10; có 3 test riêng. Check chạy trên lô hiện tại nhưng không phát hiện box nào cực đoan nên không đổi quyết định Hold.
 

@@ -22,6 +22,7 @@ Gợi ý
 - Ngưỡng nằm trong `cfg["label_format"]` — đừng viết cứng số vào code.
 """
 from ..common import ERROR, WARN, Issue, iou_xywh, parse_yolo_line
+from .aspect_ratio import run as check_aspect_ratio
 
 
 def run(ds, cfg):
@@ -70,4 +71,6 @@ def run(ds, cfg):
             if w * h > rules["max_box_frac"]:
                 issues.append(Issue("label_format", WARN, "BOX_HUGE", stem,
                                     "box phủ phần lớn ảnh", line_no))
+    # Check bổ sung cho bonus rubric; chỉ phát cảnh báo để người kiểm tra.
+    issues.extend(check_aspect_ratio(ds, cfg))
     return issues
