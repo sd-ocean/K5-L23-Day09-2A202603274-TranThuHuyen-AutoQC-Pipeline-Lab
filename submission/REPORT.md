@@ -56,7 +56,7 @@ Chênh mAP50 clean − raw là +0.0043; với hai seed và test 100 ảnh, chưa
 
 Quyết định hiện tại là **Hold**. Để tiến tới Release, cần xử lý cảnh báo còn lại và chạy lại pipeline; cần giảm tỷ lệ ảnh còn cảnh báo xuống dưới 10% mà vẫn giữ việc kiểm tra nhãn có ý nghĩa.
 
-- Prompt chính: triển khai bốn module theo docstring/test, giữ ngưỡng trong config, xử lý lỗi dòng an toàn và không sửa dữ liệu raw.
+- Prompt chính: hỗ trợ triển khai bốn module theo docstring/test, giữ ngưỡng trong config, xử lý lỗi dòng an toàn và không sửa dữ liệu raw.
 - Cách kiểm: 53 test liên quan (gồm check bonus), toàn bộ 82 test và pipeline e2e; kiểm tra riêng ngân sách 0 cho gate.
 - Lỗi AI phát hiện khi kiểm: code ý kiến thứ hai truyền nhầm cấu trúc tuple của nhãn vào phép tính IoU; đã sửa và chạy lại test.
 
